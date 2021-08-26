@@ -21,15 +21,21 @@ uint32_t timer;
 uint8_t i2cData[14]; // Buffer for I2C data
 
 
-// Variables for motors
-/* Motor A connections */
+// Variables for motor
+/* Motor connections */
 int enA = 11;
 int in1 = 12;
 int in2 = 13;
-/* Motor B connections */
-int enB = 10;
-int in3 = 9;
-int in4 = 8;
+
+
+// Variables for encoder
+ #define outputA 2
+ #define outputB 3
+ int encoder_counter = 0; 
+ int aState;
+ int aLastState;  
+ double pos;
+ double diam = 72.67; // Diameter of the wheel in millimiters
 
 
 // Variables for controller
@@ -41,12 +47,13 @@ float ctrl_timer = 0;
 float ctrl_timer_old, d_ctrl_timer;
 float control_input, control_signal;
 float ref_angle = 0;
+double position = 0;
 
 /* LQR gains obtained from matlab code */
 // For bigger aluminium prototype
 float K1 = 0;
-float K2 = 25.724278255988015;
-float K3 = 20.56993569145128;
+float K2 = 25; //25.724278255988015;
+float K3 = 20; //20.56993569145128;
 
 /*|||||||||||||||||||||||||||||| FSR ||||||||||||||||||||||||||||||*/
 void setupFSR() {
@@ -142,18 +149,13 @@ void read_mpu_6050_data() {                  //Subroutine for reading the raw gy
 void setupMotors() {
   // Set all the motor control pins to outputs
   pinMode(enA, OUTPUT);
-  pinMode(enB, OUTPUT);
   pinMode(in1, OUTPUT);
   pinMode(in2, OUTPUT);
-  pinMode(in3, OUTPUT);
-  pinMode(in4, OUTPUT);
-
+  
   // Turn off motors - Initial state
   digitalWrite(in1, LOW);
   digitalWrite(in2, LOW);
-  digitalWrite(in3, LOW);
-  digitalWrite(in4, LOW);
-}
+  }
 
 void MotorMovement(float veloc) {
   if (veloc == currentveloc) return;
@@ -161,22 +163,42 @@ void MotorMovement(float veloc) {
   if (veloc > 255) veloc = 255;
   else if (veloc < -255) veloc = -255;
   if (abs(angle) <= 50 ) {
-    digitalWrite(in1, veloc < 0 ? LOW : HIGH);
-    digitalWrite(in2, veloc < 0 ? HIGH : LOW);
-    digitalWrite(in3, veloc < 0 ? HIGH : LOW);
-    digitalWrite(in4, veloc < 0 ? LOW : HIGH);
+    digitalWrite(in1, veloc < 0 ? HIGH : LOW);
+    digitalWrite(in2, veloc < 0 ? LOW : HIGH);
     analogWrite(enA, map((abs(veloc)) * 10, 0, 2550, 40, 255));
-    analogWrite(enB, map((abs(veloc)) * 10, 0, 2550, 40, 255));
-  } else if (abs(angle) > 70 ) {
+      } else if (abs(angle) > 50 ) {
     veloc = 0;
     digitalWrite(in1, LOW);
     digitalWrite(in2, LOW);
-    digitalWrite(in3, LOW);
-    digitalWrite(in4, LOW);
     analogWrite(enA, 0);
-    analogWrite(enB, 0);
-  }
+    }
   currentveloc = veloc;
+}
+
+
+/*|||||||||||||||||||||||||||||| ENCODER ||||||||||||||||||||||||||||||*/
+void setupEncoder(){
+pinMode (outputA,INPUT);
+   pinMode (outputB,INPUT);
+   
+   // Reads the initial state of the outputA
+   aLastState = digitalRead(outputA);   
+}
+
+double Encoder(){
+     aState = digitalRead(outputA); // Reads the "current" state of the outputA
+   // If the previous and the current state of the outputA are different, that means a Pulse has occured
+   if (aState != aLastState){     
+     // If the outputB state is different to the outputA state, that means the encoder is rotating clockwise
+     if (digitalRead(outputB) != aState) { 
+       encoder_counter ++;
+     } else {
+       encoder_counter --;
+     }
+   } 
+   aLastState = aState; // Updates the previous state of the outputA with the current state
+   pos = encoder_counter*diam*PI/544;
+   return pos;
 }
 
 /*|||||||||||||||||||||||||||||| CONTROL ||||||||||||||||||||||||||||||*/
@@ -188,8 +210,9 @@ void Control() {
   control_input = ((angle - ref_angle) * K2 + d_angle * K3);
 
   // If the movement is small, make the behaviour less twitchy
-  if (abs(angle) <= 5) { control_input = control_input / 5; } 
-  
+  // if (abs(angle) <= 5) { control_input = control_input / 5; } 
+  if (abs(angle) <= 2) { control_input = control_input / 5; } 
+
   MotorMovement(control_input);
 }
 
@@ -206,6 +229,7 @@ void setup() {
   setupFSR();
   setupIMU();
   setupMotors();
+  setupEncoder();
 
   ctrl_timer = millis();
 }
@@ -219,6 +243,7 @@ void loop() {
 
   // Read new states
   angle = IMU();
+  position = Encoder();
 
   // Obtain the time difference
   ctrl_timer_old = ctrl_timer;
@@ -236,13 +261,20 @@ void loop() {
   
   ControlThread.check();
 
-  /*// This condition is here to create a control signal that is printable and true to what is sent to the motors
+  // This condition is here to create a control signal that is printable and true to what is sent to the motors
   if (control_input >= 0) control_signal = map((abs(control_input)) * 10, 0, 2550, 40, 255);
-  else if (control_input < 0) control_signal = - map((abs(control_input)) * 10, 0, 2550, 40, 255);*/
+  else if (control_input < 0) control_signal = - map((abs(control_input)) * 10, 0, 2550, 40, 255);
 
   // Print the FSR values:
   /*Serial.print("\n Front sensor:"); Serial.print(fsr_front);
   Serial.print("\r Back sensor:"); Serial.print(fsr_back);*/
+  
+  // Print Encoder Values
+  /*Serial.print("Position: "); Serial.print(position); Serial.print("\t");
+  Serial.print("Counter: "); Serial.print(encoder_counter); Serial.print("\t");
+  Serial.print("A: "); Serial.print(digitalRead(outputA)); Serial.print("\t");
+  Serial.print(",B: "); Serial.print(digitalRead(outputB)); Serial.print("\t");
+  Serial.println();*/
   
   // Print all signals
   /*Serial.print("Angle: "); Serial.print(angle); Serial.print("\t");
@@ -251,25 +283,30 @@ void loop() {
   //Serial.print("Motor Vel: "); Serial.print(map((abs(control_input)) * 10, 0, 2550, 40, 255));
   Serial.print("Front sensor:"); Serial.print(fsr_front); Serial.print("\t");
   Serial.print("Back sensor:"); Serial.print(fsr_back); Serial.print("\t");
+  Serial.print("Position: "); Serial.print(position); Serial.print("\t");
+  Serial.print("Counter: "); Serial.print(encoder_counter); Serial.print("\t");
   Serial.println();*/
   
   // Print to csv format
-  /*Serial.print(force_front); Serial.print(",");
+  //Serial.print(force_front); Serial.print(",");
   Serial.print(force_back); Serial.print(",");
   Serial.print(angle); Serial.print(",");
   Serial.print(d_angle); Serial.print(",");
   Serial.print(ref_angle); Serial.print(",");
   Serial.print(control_input); Serial.print(",");
   Serial.print(control_signal); Serial.print(",");
-  Serial.print(millis()); Serial.println();*/
+  Serial.print(millis()); Serial.println();
 
   // Print to Serial.Plotter
-  /*//Serial.print("Angle: "); Serial.print(angle);
+  //Serial.print("Angle: "); Serial.print(angle);
   //Serial.print(",Ref: "); Serial.print(ref_angle);
   //Serial.print(",-20,20");
-  Serial.print("FSR_Frente: "); Serial.print(force_front);
-  Serial.print(",FSR_Trás: "); Serial.print(force_back);
-  Serial.println();*/
+  //Serial.print("FSR_Frente: "); Serial.print(force_front);
+  //Serial.print(",FSR_Trás: "); Serial.print(force_back);
+  //Serial.println();
+  //Serial.print("A: "); Serial.print(digitalRead(outputA));
+  //Serial.print(",B: "); Serial.print(digitalRead(outputB));
+  //Serial.println();
 
   // Recieve angle ref value from serial
   /*if (Serial.available() > 0 ) {
